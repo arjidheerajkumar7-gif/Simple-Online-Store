@@ -1,6 +1,6 @@
-# [Project name]
+# Little Market
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+A small online shop for browsing everyday goods, maintaining a shopping bag, and saving demo orders.
 
 ## Run & Operate
 
@@ -9,7 +9,8 @@ _Replace the heading above with the project's name, and this line with one sente
 - `pnpm run build` — typecheck + build all packages
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+- Shop API uses Supabase PostgREST via the `SUPER_BASE_URL` and `SERVICE_ROLE_API` Replit Secrets. The service-role key is server-only; the storefront does not use the anon key.
+- Run `artifacts/little-market/supabase/setup.sql` in the Supabase SQL Editor to create the catalog and order tables and seed the initial products.
 
 ## Stack
 
@@ -26,11 +27,13 @@ _Populate as you build — short repo map plus pointers to the source-of-truth f
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- Product catalog and saved orders are read and written through the API server using Supabase's service-role key; never send that key to the browser.
+- Product prices are authoritative in the database and order totals are recalculated in the database function at submission time.
+- The shopping bag is stored in the shopper's browser; customer and order details are stored in Supabase after successful checkout.
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+Browse and filter the product catalog, save a cart locally, and submit a demo order without taking payment.
 
 ## User preferences
 

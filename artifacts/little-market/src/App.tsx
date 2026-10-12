@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useState, type CSSProperties, type FormEvent } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ArrowDown, ArrowRight, Check, Minus, Plus, ShoppingBag, X } from 'lucide-react';
-import { products, type Product } from './data/products';
+import { useCreateOrder, useListProducts, type Product } from '@workspace/api-client-react';
 
 type Cart = Record<string, number>;
 type Customer = { name: string; email: string; address: string };
 const CART_KEY = 'little-market-cart-v1';
-const categories = ['Everything', ...Array.from(new Set(products.map((product) => product.category)))];
 const money = (amount: number) => `$${amount.toFixed(2)}`;
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { retry: false } },
+});
 
 function getSavedCart(): Cart {
   try {
@@ -27,7 +30,26 @@ function ProductPhoto({ product, testId }: { product: Product; testId: string })
   );
 }
 
-function App() {
+function requestErrorMessage(error: unknown, fallback: string): string {
+  if (typeof error === 'object' && error !== null && 'data' in error) {
+    const data = error.data;
+    if (typeof data === 'object' && data !== null && 'error' in data && typeof data.error === 'string') {
+      return data.error;
+    }
+  }
+  return fallback;
+}
+
+function Storefront() {
+  const {
+    data: products,
+    error: productsQueryError,
+    isLoading: productsLoading,
+    isError: productsError,
+    refetch,
+  } = useListProducts();
+  const createOrder = useCreateOrder();
+  const productList = products ?? [];
   const [cart, setCart] = useState<Cart>(getSavedCart);
   const [category, setCategory] = useState('Everything');
   const [cartOpen, setCartOpen] = useState(false);
@@ -35,9 +57,14 @@ function App() {
   const [customer, setCustomer] = useState<Customer>({ name: '', email: '', address: '' });
   const [confirmed, setConfirmed] = useState(false);
   const [lastTotal, setLastTotal] = useState(0);
+  const [orderId, setOrderId] = useState('');
   const [toast, setToast] = useState('');
 
   useEffect(() => { localStorage.setItem(CART_KEY, JSON.stringify(cart)); }, [cart]);
+  const categories = useMemo(
+    () => ['Everything', ...Array.from(new Set(productList.map((product) => product.category)))],
+    [productList],
+  );
   useEffect(() => {
     if (!toast) return;
     const timer = window.setTimeout(() => setToast(''), 1900);
@@ -45,12 +72,12 @@ function App() {
   }, [toast]);
 
   const filtered = useMemo(
-    () => category === 'Everything' ? products : products.filter((item) => item.category === category),
-    [category],
+    () => category === 'Everything' ? productList : productList.filter((item) => item.category === category),
+    [category, productList],
   );
   const itemCount = Object.values(cart).reduce((sum, quantity) => sum + quantity, 0);
-  const subtotal = products.reduce((sum, product) => sum + product.price * (cart[product.id] ?? 0), 0);
-  const cartProducts = products.filter((product) => (cart[product.id] ?? 0) > 0);
+  const subtotal = productList.reduce((sum, product) => sum + product.price * (cart[product.id] ?? 0), 0);
+  const cartProducts = productList.filter((product) => (cart[product.id] ?? 0) > 0);
 
   const addToCart = (product: Product) => {
     setCart((current) => ({ ...current, [product.id]: (current[product.id] ?? 0) + 1 }));
@@ -68,12 +95,31 @@ function App() {
   const closeCheckout = () => {
     setCheckoutOpen(false);
     setConfirmed(false);
+    createOrder.reset();
   };
-  const finishDemo = (event: FormEvent<HTMLFormElement>) => {
+  const submitOrder = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setLastTotal(subtotal);
-    setCart({});
-    setConfirmed(true);
+    createOrder.mutate(
+      {
+        data: {
+          customerName: customer.name,
+          customerEmail: customer.email,
+          shippingAddress: customer.address,
+          items: cartProducts.map((product) => ({
+            productId: product.id,
+            quantity: cart[product.id],
+          })),
+        },
+      },
+      {
+        onSuccess: (order) => {
+          setLastTotal(order.totalCents / 100);
+          setOrderId(order.id);
+          setCart({});
+          setConfirmed(true);
+        },
+      },
+    );
   };
 
   return (
@@ -120,7 +166,14 @@ function App() {
             </button>
           ))}
         </div>
-        {filtered.length ? (
+        {productsLoading ? (
+          <div className="catalog-message" role="status" data-testid="status-products-loading">Gathering the good things...</div>
+        ) : productsError ? (
+          <div className="catalog-message catalog-error" role="alert" data-testid="status-products-error">
+            <p>{requestErrorMessage(productsQueryError, 'The shop catalog is unavailable right now.')}</p>
+            <button onClick={() => void refetch()} data-testid="button-retry-products">Try again</button>
+          </div>
+        ) : filtered.length ? (
           <div className="product-grid" data-testid="list-products">
             {filtered.map((product, index) => (
               <article className="product-card" key={product.id} data-testid={`card-product-${product.id}`} style={{ animationDelay: `${index * 45}ms` }}>
@@ -180,7 +233,7 @@ function App() {
                 </div>
                 <div className="cart-bottom">
                   <div className="subtotal-row"><span>Subtotal</span><span data-testid="text-cart-subtotal">{money(subtotal)}</span></div>
-                  <p className="demo-note">Just a demo checkout. No payment is collected.</p>
+                  <p className="demo-note">We’ll save this order in the shop database. No payment is collected.</p>
                   <button className="checkout-button" onClick={() => { setCartOpen(false); setCheckoutOpen(true); }} data-testid="button-checkout">Continue to checkout <ArrowRight size={15} style={{ verticalAlign: 'middle', marginLeft: 5 }} /></button>
                 </div>
               </>
@@ -201,15 +254,18 @@ function App() {
           <section className="checkout-modal" role="dialog" aria-modal="true" aria-labelledby="checkout-title" data-testid="panel-checkout">
             {!confirmed ? (
               <>
-                <div className="modal-top"><div><h2 id="checkout-title">A few details</h2><p>This is a demo checkout — no payment or order will be made.</p></div>
+                <div className="modal-top"><div><h2 id="checkout-title">A few details</h2><p>Your order will be saved for this demo. No payment is collected.</p></div>
                   <button className="icon-button" onClick={closeCheckout} aria-label="Close checkout" data-testid="button-close-checkout"><X size={20} /></button>
                 </div>
-                <form className="checkout-form" onSubmit={finishDemo} data-testid="form-checkout">
+                <form className="checkout-form" onSubmit={submitOrder} data-testid="form-checkout">
                   <div className="field"><label htmlFor="customer-name">YOUR NAME</label><input id="customer-name" name="name" autoComplete="name" placeholder="First and last name" required value={customer.name} onChange={(event) => setCustomer({ ...customer, name: event.target.value })} data-testid="input-customer-name" /></div>
                   <div className="field"><label htmlFor="customer-email">EMAIL ADDRESS</label><input id="customer-email" name="email" type="email" autoComplete="email" placeholder="you@example.com" required value={customer.email} onChange={(event) => setCustomer({ ...customer, email: event.target.value })} data-testid="input-customer-email" /></div>
                   <div className="field"><label htmlFor="customer-address">DELIVERY ADDRESS</label><input id="customer-address" name="address" autoComplete="street-address" placeholder="Where should we send the good things?" required value={customer.address} onChange={(event) => setCustomer({ ...customer, address: event.target.value })} data-testid="input-customer-address" /></div>
                   <div className="checkout-summary"><span>{itemCount} {itemCount === 1 ? 'item' : 'items'} in your bag</span><strong data-testid="text-checkout-total">{money(subtotal)}</strong></div>
-                  <button className="submit-button" type="submit" data-testid="button-place-demo-order">Show my demo confirmation</button>
+                  {createOrder.isError && <p className="form-error" role="alert" data-testid="status-order-error">{requestErrorMessage(createOrder.error, 'We could not save your order. Please try again.')}</p>}
+                  <button className="submit-button" type="submit" disabled={createOrder.isPending || cartProducts.length === 0} data-testid="button-place-demo-order">
+                    {createOrder.isPending ? 'Saving your order...' : 'Save demo order'}
+                  </button>
                 </form>
               </>
             ) : (
@@ -217,8 +273,9 @@ function App() {
                 <div className="confirmation-mark"><Check size={30} /></div>
                 <span className="eyebrow">All set, {customer.name.split(' ')[0]}.</span>
                 <h2>That was easy.</h2>
-                <p>Your demo order is all wrapped up. Nothing has been charged or sent anywhere — thanks for taking a look around our little shop.</p>
-                <div className="order-total" data-testid="text-confirmation-total">Demo basket total · {money(lastTotal)}</div>
+                <p>Your order has been saved in the shop database. No payment has been collected and nothing has shipped.</p>
+                <div className="order-total" data-testid="text-order-id">Order · {orderId.slice(0, 8)}</div>
+                <div className="order-total" data-testid="text-confirmation-total">Order total · {money(lastTotal)}</div>
                 <button className="submit-button" onClick={closeCheckout} data-testid="button-finish-shopping">Back to the market</button>
               </div>
             )}
@@ -227,6 +284,14 @@ function App() {
       )}
       {toast && <div className="toast-pop" role="status" data-testid="status-cart-feedback">{toast}</div>}
     </div>
+  );
+}
+
+function App() {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <Storefront />
+    </QueryClientProvider>
   );
 }
 
