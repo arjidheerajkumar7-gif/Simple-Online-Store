@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Little Market"
+description = "A simple, responsive online shop with a product catalog, shopping cart, and local demo checkout."
+version = "1.0.0"
+id = "artifacts/little-market"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 22662
+
+[services.development]
+run = "pnpm --filter @workspace/little-market run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/little-market", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/little-market/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "22662"
+BASE_PATH = "/"
